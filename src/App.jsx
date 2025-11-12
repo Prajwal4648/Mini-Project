@@ -1,5 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Play, Moon, Sun, Save, Upload, Code2, Maximize2, Minimize2, Layout, Monitor, AlertCircle, CheckCircle } from 'lucide-react';
+import Split from 'react-split';
+import { useMediaQuery } from './utils/useMediaQuery';
+import AIReviewPane from "./components/AIReviewPane";
 
 export default function App() {
   const [code, setCode] = useState(`public class HelloWorld {
@@ -24,6 +27,18 @@ export default function App() {
   const [isDark, setIsDark] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [layout, setLayout] = useState('horizontal');
+  const isLg = useMediaQuery('(min-width: 1024px)');
+  // AI review state
+  const [aiAnalysis, setAiAnalysis] = useState(null); // { issues, improvements, complexity, hints }
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState(null);
+  // stdin for program input
+  const [stdin, setStdin] = useState('');
+  // Live per-line review state
+  const [enableLiveReview, setEnableLiveReview] = useState(false);
+  const [lineAnnotations, setLineAnnotations] = useState([]); // [{line, issue, hint, severity, suggestion, explanationSteps}]
+  const [aiLiveLoading, setAiLiveLoading] = useState(false);
+  const reviewDebounceRef = useRef(null);
 
   const compileAndRun = async () => {
     setIsCompiling(true);
@@ -43,7 +58,8 @@ export default function App() {
         body: JSON.stringify({
           code: code,
           language: 'java',
-          versionIndex: '4'
+          versionIndex: '4',
+          stdin
         })
       });
 
@@ -111,6 +127,72 @@ Or run both frontend and backend together:
   const toggleLayout = () => {
     setLayout(prev => prev === 'horizontal' ? 'vertical' : 'horizontal');
   };
+
+  // Call backend Gemini API for structured review
+  const runAIReview = async () => {
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const resp = await fetch('http://localhost:3001/api/gemini/review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, language: 'java' })
+      });
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(`AI review failed (${resp.status}): ${text}`);
+      }
+      const data = await resp.json();
+      const analysis = data?.analysis;
+      setAiAnalysis(analysis || null);
+    } catch (err) {
+      setAiError(err.message || 'AI review failed');
+      setAiAnalysis(null);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  // Live per-line annotations fetch (debounced on code changes)
+  const fetchLineAnnotations = async (currentCode) => {
+    setAiLiveLoading(true);
+    try {
+      const resp = await fetch('http://localhost:3001/api/gemini/annotate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: currentCode, language: 'java' })
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        setLineAnnotations(Array.isArray(data.lines) ? data.lines : []);
+      }
+    } catch (e) {
+      // ignore transient errors for live mode
+    } finally {
+      setAiLiveLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!enableLiveReview) return;
+    if (reviewDebounceRef.current) clearTimeout(reviewDebounceRef.current);
+    reviewDebounceRef.current = setTimeout(() => {
+      fetchLineAnnotations(code);
+    }, 1200);
+    return () => reviewDebounceRef.current && clearTimeout(reviewDebounceRef.current);
+  }, [code, enableLiveReview]);
+
+  // lightweight AI review summary text
+  const aiReview = (() => {
+    const lines = code.split('\n').length;
+    const hasPrint = /System\.out\.println/.test(code);
+    const hasLoop = /for\s*\(|while\s*\(/.test(code);
+    const tips = [];
+    if (!hasPrint) tips.push('- Consider adding System.out.println for visible output.');
+    if (!hasLoop) tips.push('- Try a loop or conditional to demonstrate logic.');
+    tips.push(`- Lines: ${lines}`);
+    return `Quick review\n${tips.join('\n')}`;
+  })();
 
   return (
     <div className={`min-h-screen transition-colors duration-300 ${
@@ -230,109 +312,184 @@ Or run both frontend and backend together:
       </nav>
 
       {/* Main Workspace */}
-      <div className={`flex transition-all duration-300 ${
-        layout === 'vertical' ? 'flex-col' : 'flex-col lg:flex-row'
-      } ${isFullscreen ? 'h-screen' : 'h-[calc(100vh-60px)] sm:h-[calc(100vh-80px)]'}`}>
-        {/* Editor Pane */}
-        <div className={`transition-all duration-300 ${
-          isFullscreen 
-            ? 'w-full h-full' 
-            : layout === 'vertical' 
-              ? 'w-full h-1/2' 
-              : 'w-full lg:w-[60%] h-1/2 lg:h-full'
-        } ${layout === 'vertical' ? 'border-b' : 'lg:border-r'} ${isDark ? 'border-slate-800' : 'border-slate-200'}`}>
-          <div className={`h-10 sm:h-12 flex items-center justify-between px-3 sm:px-4 border-b ${
-            isDark 
-              ? 'bg-slate-900 border-slate-800 text-slate-300' 
-              : 'bg-slate-100 border-slate-200 text-slate-600'
-          }`}>
-            <div className="flex items-center gap-2">
-              <div className="hidden sm:flex gap-1.5">
-                <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-red-500"></div>
-                <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-yellow-500"></div>
-                <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-green-500"></div>
-              </div>
-              <span className="text-xs sm:text-sm font-medium sm:ml-3">Main.java</span>
-            </div>
-            <div className="text-xs flex items-center gap-3">
-              <span className={`px-2 py-1 rounded ${isDark ? 'bg-orange-500/20 text-orange-400' : 'bg-orange-100 text-orange-700'}`}>
-                Java
-              </span>
-              <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>
-                {code.split('\n').length} lines
-              </span>
-            </div>
-          </div>
-          
-          <div className={`h-[calc(100%-40px)] sm:h-[calc(100%-48px)] ${isDark ? 'bg-slate-900' : 'bg-white'}`}>
-            <textarea
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              className={`w-full h-full p-2 sm:p-4 font-mono text-xs sm:text-sm resize-none focus:outline-none ${
-                isDark 
-                  ? 'bg-slate-900 text-slate-100' 
-                  : 'bg-white text-slate-900'
-              }`}
-              style={{
-                fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace",
-                lineHeight: '1.6',
-                tabSize: 4
-              }}
-              spellCheck={false}
-              placeholder="Write your Java code here..."
-            />
-          </div>
-        </div>
-
-        {/* Output Pane */}
-        {!isFullscreen && (
-          <div className={`transition-all duration-300 flex flex-col ${
-            layout === 'vertical' 
-              ? 'w-full h-1/2' 
-              : 'w-full lg:w-[40%] h-1/2 lg:h-full'
-          }`}>
+      <div className={`flex transition-all duration-300 overflow-x-hidden ${
+        isFullscreen ? 'h-screen' : 'h-[calc(100vh-60px)] sm:h-[calc(100vh-80px)]'
+      }`}>
+        {isFullscreen ? (
+          // Fullscreen editor only
+          <div className={`w-full h-full ${isDark ? 'border-slate-800' : 'border-slate-200'}`}>
             <div className={`h-10 sm:h-12 flex items-center justify-between px-3 sm:px-4 border-b ${
-              isDark 
-                ? 'bg-slate-900 border-slate-800 text-slate-300' 
-                : 'bg-slate-100 border-slate-200 text-slate-600'
+              isDark ? 'bg-slate-900 border-slate-800 text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-600'
             }`}>
-              <span className="text-xs sm:text-sm font-medium">Console Output</span>
               <div className="flex items-center gap-2">
-                {compileStatus === 'success' && (
-                  <>
-                    <CheckCircle className="w-4 h-4 text-green-500" />
-                    <span className="text-xs text-green-500">Success</span>
-                  </>
-                )}
-                {compileStatus === 'error' && (
-                  <>
-                    <AlertCircle className="w-4 h-4 text-red-500" />
-                    <span className="text-xs text-red-500">Error</span>
-                  </>
-                )}
-                {isCompiling && (
-                  <>
-                    <div className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full animate-pulse ${
-                      isDark ? 'bg-blue-500' : 'bg-blue-600'
-                    }`}></div>
-                    <span className="text-xs">Running</span>
-                  </>
-                )}
+                <div className="hidden sm:flex gap-1.5">
+                  <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-red-500"></div>
+                  <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-yellow-500"></div>
+                  <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-green-500"></div>
+                </div>
+                <span className="text-xs sm:text-sm font-medium sm:ml-3">Main.java</span>
+              </div>
+              <div className="text-xs flex items-center gap-3">
+                <span className={`px-2 py-1 rounded ${isDark ? 'bg-orange-500/20 text-orange-400' : 'bg-orange-100 text-orange-700'}`}>
+                  Java
+                </span>
+                <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>
+                  {code.split('\n').length} lines
+                </span>
               </div>
             </div>
-            
-            <div className={`flex-1 overflow-auto ${
-              isDark ? 'bg-slate-950' : 'bg-slate-50'
-            }`}>
-              <div className="w-full h-full p-3 sm:p-4">
-                <pre className={`font-mono text-xs sm:text-sm whitespace-pre-wrap ${
-                  isDark ? 'text-slate-300' : 'text-slate-700'
-                }`}>
-                  {output || 'Click "Run" to compile and execute your Java code...'}
-                </pre>
-              </div>
+            <div className={`h-[calc(100%-40px)] sm:h-[calc(100%-48px)] ${isDark ? 'bg-slate-900' : 'bg-white'}`}>
+              <textarea
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                className={`w-full h-full p-2 sm:p-4 font-mono text-xs sm:text-sm resize-none focus:outline-none overflow-auto overflow-x-auto whitespace-pre ${
+                  isDark ? 'bg-slate-900 text-slate-100' : 'bg-white text-slate-900'
+                }`}
+                style={{ fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace", lineHeight: '1.6', tabSize: 4 }}
+                wrap="off"
+                spellCheck={false}
+                placeholder="Write your Java code here..."
+              />
             </div>
           </div>
+        ) : (
+          // Responsive resizable splits: outer (left/right), inner (editor/output)
+          <Split
+            className="flex w-full h-full flex-col lg:flex-row overflow-hidden"
+            sizes={[70, 30]}
+            minSize={[250, 200]}
+            gutterSize={8}
+            direction={isLg ? 'horizontal' : 'vertical'}
+          >
+            {/* Left column with vertical split */}
+            <Split
+              className={`flex flex-col h-full lg:border-r min-w-0 min-h-0 ${isDark ? 'border-slate-800' : 'border-slate-200'}`}
+              sizes={[50, 50]}
+              minSize={[150, 120]}
+              gutterSize={8}
+              direction="vertical"
+            >
+              {/* Editor (flex column for dynamic vertical resize) */}
+              <div className={`flex flex-col h-full min-h-0 ${isDark ? 'border-slate-800' : 'border-slate-200'}`}>
+                <div className={`flex-shrink-0 h-10 sm:h-12 flex items-center justify-between px-3 sm:px-4 border-b ${
+                  isDark ? 'bg-slate-900 border-slate-800 text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-600'
+                }`}>
+                  <div className="flex items-center gap-2">
+                    <div className="hidden sm:flex gap-1.5">
+                      <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-red-500"></div>
+                      <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-yellow-500"></div>
+                      <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-green-500"></div>
+                    </div>
+                    <span className="text-xs sm:text-sm font-medium sm:ml-3">Main.java</span>
+                  </div>
+                  <div className="text-xs flex items-center gap-3">
+                    <span className={`px-2 py-1 rounded ${isDark ? 'bg-orange-500/20 text-orange-400' : 'bg-orange-100 text-orange-700'}`}>
+                      Java
+                    </span>
+                    <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>
+                      {code.split('\n').length} lines
+                    </span>
+                  </div>
+                </div>
+                <div className={`relative flex-1 min-h-0 ${isDark ? 'bg-slate-900' : 'bg-white'} overflow-hidden`}> 
+                  <textarea
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    className={`w-full h-full p-2 sm:p-4 font-mono text-xs sm:text-sm resize-none focus:outline-none overflow-auto overflow-x-auto whitespace-pre ${
+                      isDark ? 'bg-slate-900 text-slate-100' : 'bg-white text-slate-900'
+                    }`}
+                    style={{ fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace", lineHeight: '1.6', tabSize: 4 }}
+                    wrap="off"
+                    spellCheck={false}
+                    placeholder="Write your Java code here..."
+                  />
+                  {enableLiveReview && lineAnnotations.length > 0 && (
+                    <div className="pointer-events-none absolute top-10 sm:top-12 left-0 h-[calc(100%-40px)] sm:h-[calc(100%-48px)] w-6 select-none text-[10px] font-mono">
+                      <div className="relative w-full h-full">
+                        {lineAnnotations.map((a) => (
+                          <div
+                            key={`mark-${a.line}`}
+                            style={{ top: (a.line - 1) * 1.6 + 'em' }}
+                            className={`absolute left-0 w-6 h-[1.4em] flex items-center justify-center ${
+                              a.severity === 'error' ? 'text-red-500' : a.severity === 'warning' ? 'text-yellow-500' : 'text-blue-500'
+                            }`}
+                            title={(a.issue || a.suggestion || 'Info') + ` (line ${a.line})`}
+                          >
+                            ●
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+              {/* Output */}
+              <div className={`flex flex-col h-full min-h-0 ${isDark ? 'border-t border-slate-800' : 'border-t border-slate-200'} m-0 min-w-0`}> 
+                <div className={`h-10 sm:h-12 flex items-center justify-between px-3 sm:px-4 border-b ${
+                  isDark ? 'bg-slate-900 border-slate-800 text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-600'
+                }`}>
+                  <span className="text-xs sm:text-sm font-medium">Console Output</span>
+                  <div className="flex items-center gap-2">
+                    {compileStatus === 'success' && (
+                      <>
+                        <CheckCircle className="w-4 h-4 text-green-500" />
+                        <span className="text-xs text-green-500">Success</span>
+                      </>
+                    )}
+                    {compileStatus === 'error' && (
+                      <>
+                        <AlertCircle className="w-4 h-4 text-red-500" />
+                        <span className="text-xs text-red-500">Error</span>
+                      </>
+                    )}
+                    {isCompiling && (
+                      <>
+                        <div className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full animate-pulse ${
+                          isDark ? 'bg-blue-500' : 'bg-blue-600'
+                        }`}></div>
+                        <span className="text-xs">Running</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+                {/* stdin input */}
+                <div className={`${isDark ? 'bg-slate-950' : 'bg-slate-50'} px-3 sm:px-4 pt-2`}> 
+                  <label className="block text-[10px] sm:text-xs font-medium opacity-70 mb-1">Program Input (stdin)</label>
+                  <textarea
+                    value={stdin}
+                    onChange={(e) => setStdin(e.target.value)}
+                    placeholder="Enter input lines your program reads (Scanner, BufferedReader, etc.)"
+                    className={`w-full text-[11px] sm:text-xs rounded-md border p-2 resize-y min-h-[60px] focus:outline-none ${
+                      isDark ? 'bg-slate-900 border-slate-800 text-slate-200 placeholder-slate-600' : 'bg-white border-slate-300 text-slate-700 placeholder-slate-400'
+                    }`}
+                    spellCheck={false}
+                  />
+                </div>
+                <div className={`flex-1 min-h-0 overflow-auto ${isDark ? 'bg-slate-950' : 'bg-slate-50'} p-0 m-0 min-w-0`}> 
+                  <pre className={`w-full h-full p-3 sm:p-4 font-mono text-xs sm:text-sm whitespace-pre-wrap break-words ${
+                    isDark ? 'text-slate-300' : 'text-slate-700'
+                  }`}> 
+{output || 'Click "Run" to compile and execute your Java code...'}
+                  </pre>
+                </div>
+              </div>
+            </Split>
+            {/* Right column: AI review */}
+            <div className="min-w-0 min-h-0 h-full overflow-hidden">
+              <AIReviewPane
+                review={aiReview}
+                analysis={aiAnalysis}
+                loading={aiLoading}
+                error={aiError}
+                onDeepReview={runAIReview}
+                lineAnnotations={lineAnnotations}
+                enableLiveReview={enableLiveReview}
+                setEnableLiveReview={setEnableLiveReview}
+                aiLiveLoading={aiLiveLoading}
+                isDark={isDark}
+              />
+            </div>
+          </Split>
         )}
       </div>
     </div>

@@ -20,3 +20,36 @@ code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
 }
+
+/* Split.js gutter styles */
+.gutter {
+  background-color: transparent;
+  position: relative;
+}
+
+.gutter.gutter-horizontal {
+  cursor: col-resize;
+  width: 8px;
+}
+
+.gutter.gutter-vertical {
+  cursor: row-resize;
+  height: 8px;
+}
+
+/* Visible handle line for better UX in both themes */
+.gutter:before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2px;
+  background-color: rgb(203 213 225); /* slate-300 */
+}
+
+/* Dark theme tweak; we rely on container classes to toggle */
+.dark .gutter:before {
+  background-color: rgb(51 65 85); /* slate-700 */
+}
