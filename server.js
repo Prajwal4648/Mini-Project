@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import fetch from 'node-fetch';
+import Groq from 'groq-sdk';
 import dotenv from 'dotenv';
 
 // Load environment variables
@@ -22,12 +23,20 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'Compilation API is ready' });
 });
 
-// Gemini code review endpoint
-app.post('/api/gemini/review', async (req, res) => {
+const getGroqClient = () => {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) return null;
+  return new Groq({ apiKey });
+};
+
+const GROQ_MODEL = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
+
+// Groq code review endpoint
+app.post('/api/groq/review', async (req, res) => {
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return res.status(401).json({ error: 'Gemini API key missing. Set GEMINI_API_KEY in .env' });
+    const groq = getGroqClient();
+    if (!groq) {
+      return res.status(401).json({ error: 'Groq API key missing. Set GROQ_API_KEY in .env' });
     }
 
     const { code, language = 'java' } = req.body || {};
@@ -56,29 +65,14 @@ Guidelines:
 Code to analyze (between triple backticks):
 \n\n\u0060\u0060\u0060${language}\n${snippet}\n\u0060\u0060\u0060`;
 
-    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-goog-api-key': apiKey,
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [{ text: prompt }]
-          }
-        ]
-      })
+    const completion = await groq.chat.completions.create({
+      model: GROQ_MODEL,
+      temperature: 0.2,
+      messages: [
+        { role: 'user', content: prompt }
+      ]
     });
-
-    if (!resp.ok) {
-      const t = await resp.text();
-      return res.status(resp.status).json({ error: 'Gemini API error', details: t });
-    }
-
-    const data = await resp.json();
-    const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const raw = completion?.choices?.[0]?.message?.content || '';
 
     function extractJson(text) {
       if (!text) return null;
@@ -107,16 +101,16 @@ Code to analyze (between triple backticks):
 
     return res.json({ ok: true, analysis: parsed, raw });
   } catch (err) {
-    console.error('Gemini review error:', err);
+    console.error('Groq review error:', err);
     return res.status(500).json({ error: 'Failed to analyze code', message: err?.message });
   }
 });
 
-// Gemini per-line annotation endpoint
-app.post('/api/gemini/annotate', async (req, res) => {
+// Groq per-line annotation endpoint
+app.post('/api/groq/annotate', async (req, res) => {
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) return res.status(400).json({ error: 'Gemini API key missing' });
+    const groq = getGroqClient();
+    if (!groq) return res.status(400).json({ error: 'Groq API key missing' });
 
     const { code, language = 'java' } = req.body || {};
     if (!code || typeof code !== 'string') {
@@ -150,22 +144,14 @@ Code:
 ${truncated}
 <<<CODE END>>>`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.3 }
-      })
+    const completion = await groq.chat.completions.create({
+      model: GROQ_MODEL,
+      temperature: 0.3,
+      messages: [
+        { role: 'user', content: prompt }
+      ]
     });
-
-    if (!resp.ok) {
-      const t = await resp.text();
-      return res.status(resp.status).json({ error: 'Gemini request failed', details: t });
-    }
-    const data = await resp.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const text = completion?.choices?.[0]?.message?.content || '';
 
     function tryParse(jsonText) {
       try { return JSON.parse(jsonText); } catch { return null; }
@@ -192,7 +178,7 @@ ${truncated}
       }));
     return res.json({ lines: clean, truncated: lines.length > maxLines });
   } catch (err) {
-    console.error('Gemini annotate error:', err);
+    console.error('Groq annotate error:', err);
     return res.status(500).json({ error: 'annotate failed', message: err?.message });
   }
 });
@@ -298,8 +284,8 @@ app.use((req, res) => {
       'GET /': 'Health check',
       'GET /api/health': 'API health check',
       'POST /api/compile': 'Compile Java code',
-      'POST /api/gemini/review': 'AI review of code using Gemini',
-      'POST /api/gemini/annotate': 'AI per-line annotations using Gemini'
+      'POST /api/groq/review': 'AI review of code using Groq',
+      'POST /api/groq/annotate': 'AI per-line annotations using Groq'
     }
   });
 });
@@ -308,6 +294,6 @@ app.listen(PORT, () => {
   console.log(`🚀 Proxy server running on http://localhost:${PORT}`);
   console.log(`✓ CORS enabled for all origins`);
   console.log(`✓ Endpoint: POST http://localhost:${PORT}/api/compile`);
-  console.log(`✓ Endpoint: POST http://localhost:${PORT}/api/gemini/review`);
-  console.log(`✓ Endpoint: POST http://localhost:${PORT}/api/gemini/annotate`);
+  console.log(`✓ Endpoint: POST http://localhost:${PORT}/api/groq/review`);
+  console.log(`✓ Endpoint: POST http://localhost:${PORT}/api/groq/annotate`);
 });

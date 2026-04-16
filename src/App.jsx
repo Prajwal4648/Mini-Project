@@ -128,12 +128,12 @@ Or run both frontend and backend together:
     setLayout(prev => prev === 'horizontal' ? 'vertical' : 'horizontal');
   };
 
-  // Call backend Gemini API for structured review
+  // Call backend Groq API for structured review
   const runAIReview = async () => {
     setAiLoading(true);
     setAiError(null);
     try {
-      const resp = await fetch('http://localhost:3001/api/gemini/review', {
+      const resp = await fetch('http://localhost:3001/api/groq/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code, language: 'java' })
@@ -157,7 +157,7 @@ Or run both frontend and backend together:
   const fetchLineAnnotations = async (currentCode) => {
     setAiLiveLoading(true);
     try {
-      const resp = await fetch('http://localhost:3001/api/gemini/annotate', {
+      const resp = await fetch('http://localhost:3001/api/groq/annotate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code: currentCode, language: 'java' })
