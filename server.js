@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import fetch from 'node-fetch';
-import Groq from 'groq-sdk';
+import Groq from 'groq';
 import dotenv from 'dotenv';
 
 // Load environment variables
