@@ -22,161 +22,119 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'Compilation API is ready' });
 });
 
-// Gemini code review endpoint
+const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_MODEL = 'llama-3.3-70b-versatile';
+
+async function groqChat(apiKey, prompt, temperature = 0.3) {
+  const resp = await fetch(GROQ_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: GROQ_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      temperature,
+      max_tokens: 2048,
+    }),
+  });
+  if (!resp.ok) {
+    const t = await resp.text();
+    throw new Error(`Groq API error ${resp.status}: ${t}`);
+  }
+  const data = await resp.json();
+  return data?.choices?.[0]?.message?.content || '';
+}
+
+function extractJson(text) {
+  if (!text) return null;
+  const cleaned = text.replace(/^```(json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  try { return JSON.parse(cleaned); } catch { /* continue */ }
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start !== -1 && end > start) {
+    try { return JSON.parse(cleaned.slice(start, end + 1)); } catch { /* ignore */ }
+  }
+  return null;
+}
+
+// AI code review endpoint (Groq / Llama)
 app.post('/api/gemini/review', async (req, res) => {
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return res.status(401).json({ error: 'Gemini API key missing. Set GEMINI_API_KEY in .env' });
-    }
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) return res.status(401).json({ error: 'GROQ_API_KEY missing in .env' });
 
     const { code, language = 'java' } = req.body || {};
-    if (!code || typeof code !== 'string' || code.trim().length === 0) {
+    if (!code || typeof code !== 'string' || !code.trim()) {
       return res.status(400).json({ error: 'No code provided' });
     }
 
-    // Build concise, JSON-only prompt to avoid full solutions
-    const maxPreview = 12000; // keep payload reasonable
-    const snippet = code.length > maxPreview ? code.slice(0, maxPreview) + '\n... (truncated)' : code;
+    const snippet = code.length > 12000 ? code.slice(0, 12000) + '\n... (truncated)' : code;
     const prompt = `You are a senior code reviewer. Analyze the following ${language} code.
-Return ONLY strict JSON with this schema and no extra commentary:
+Return ONLY strict JSON with this exact schema (no extra text or markdown):
 {
   "issues": string[],
   "improvements": string[],
-  "complexity": { "time": string, "space": string, "notes"?: string },
-  "hints"?: string[]
+  "complexity": { "time": string, "space": string, "notes": string },
+  "hints": string[]
 }
+Rules:
+- Keep each item under 180 characters.
+- Do NOT provide full solutions or complete code.
+- Use "N/A" for complexity when not applicable.
 
-Guidelines:
-- If there are errors, provide short hints to fix them; DO NOT provide full solutions or full code.
-- Provide clear, concise items. Keep each item under 180 characters.
-- If complexity is not applicable, use "N/A".
-- Be accurate but brief.
+\`\`\`${language}
+${snippet}
+\`\`\``;
 
-Code to analyze (between triple backticks):
-\n\n\u0060\u0060\u0060${language}\n${snippet}\n\u0060\u0060\u0060`;
-
-    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-goog-api-key': apiKey,
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [{ text: prompt }]
-          }
-        ]
-      })
-    });
-
-    if (!resp.ok) {
-      const t = await resp.text();
-      return res.status(resp.status).json({ error: 'Gemini API error', details: t });
-    }
-
-    const data = await resp.json();
-    const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-
-    function extractJson(text) {
-      if (!text) return null;
-      // Strip code fences if present
-      const cleaned = text.replace(/^```(json)?/i, '').replace(/```$/i, '').trim();
-      try {
-        return JSON.parse(cleaned);
-      } catch {
-        // Try to find first JSON block
-        const start = cleaned.indexOf('{');
-        const end = cleaned.lastIndexOf('}');
-        if (start !== -1 && end !== -1 && end > start) {
-          const maybe = cleaned.slice(start, end + 1);
-          try { return JSON.parse(maybe); } catch { /* ignore */ }
-        }
-      }
-      return null;
-    }
-
-    const parsed = extractJson(raw) || {
-      issues: [],
-      improvements: [],
-      complexity: { time: 'N/A', space: 'N/A' },
-      hints: []
-    };
-
+    const raw = await groqChat(apiKey, prompt, 0.3);
+    const parsed = extractJson(raw) || { issues: [], improvements: [], complexity: { time: 'N/A', space: 'N/A' }, hints: [] };
     return res.json({ ok: true, analysis: parsed, raw });
   } catch (err) {
-    console.error('Gemini review error:', err);
+    console.error('AI review error:', err);
     return res.status(500).json({ error: 'Failed to analyze code', message: err?.message });
   }
 });
 
-// Gemini per-line annotation endpoint
+// AI per-line annotation endpoint (Groq / Llama)
 app.post('/api/gemini/annotate', async (req, res) => {
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) return res.status(400).json({ error: 'Gemini API key missing' });
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) return res.status(400).json({ error: 'GROQ_API_KEY missing in .env' });
 
     const { code, language = 'java' } = req.body || {};
-    if (!code || typeof code !== 'string') {
-      return res.status(400).json({ error: 'code required' });
-    }
+    if (!code || typeof code !== 'string') return res.status(400).json({ error: 'code required' });
 
     const lines = code.split('\n');
-    const maxLines = 500;
-    const truncated = lines.slice(0, maxLines).join('\n');
-    const prompt = `You are a code reviewer. Return ONLY JSON matching this schema:
+    const truncated = lines.slice(0, 500).join('\n');
+    const prompt = `You are a code reviewer. Return ONLY JSON (no markdown, no extra text) matching this schema:
 {
   "lines": [
     {
       "line": <number>,
-      "issue": "<short problem or '' if none>",
+      "issue": "<short problem or empty string>",
       "hint": "<single short hint, no full solution>",
       "severity": "<info|warning|error>",
       "suggestion": "<one concise improvement>",
-      "explanationSteps": ["Step 1 ...", "Step 2 ..."]
+      "explanationSteps": ["Step 1...", "Step 2..."]
     }
   ]
 }
 Rules:
-- Include only lines with a non-empty issue OR meaningful improvement.
-- Keep hints short; do not provide full solutions.
-- Steps must be incremental so a beginner can follow.
-- Do not add extra top-level keys.
+- Include ONLY lines that have a real issue or meaningful improvement.
+- Keep hints short; no full solutions.
+- Steps must be incremental for a beginner.
 Language: ${language}
 Code:
-<<<CODE BEGIN>>>
+\`\`\`${language}
 ${truncated}
-<<<CODE END>>>`;
+\`\`\``;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.3 }
-      })
-    });
-
-    if (!resp.ok) {
-      const t = await resp.text();
-      return res.status(resp.status).json({ error: 'Gemini request failed', details: t });
-    }
-    const data = await resp.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-
-    function tryParse(jsonText) {
-      try { return JSON.parse(jsonText); } catch { return null; }
-    }
-    let parsed = tryParse(text);
-    if (!parsed) {
-      const m = text.match(/\{[\s\S]*\}/);
-      if (m) parsed = tryParse(m[0]);
-    }
+    const text = await groqChat(apiKey, prompt, 0.3);
+    let parsed = extractJson(text);
     if (!parsed || !Array.isArray(parsed.lines)) {
-      return res.json({ lines: [], truncated: lines.length > maxLines });
+      return res.json({ lines: [], truncated: lines.length > 500 });
     }
     const clean = parsed.lines
       .filter(l => typeof l.line === 'number' && l.line >= 1 && l.line <= lines.length)
@@ -188,11 +146,11 @@ ${truncated}
         suggestion: String(l.suggestion || '').slice(0, 180),
         explanationSteps: Array.isArray(l.explanationSteps)
           ? l.explanationSteps.slice(0, 8).map(s => String(s).slice(0, 160))
-          : []
+          : [],
       }));
-    return res.json({ lines: clean, truncated: lines.length > maxLines });
+    return res.json({ lines: clean, truncated: lines.length > 500 });
   } catch (err) {
-    console.error('Gemini annotate error:', err);
+    console.error('AI annotate error:', err);
     return res.status(500).json({ error: 'annotate failed', message: err?.message });
   }
 });
@@ -285,6 +243,93 @@ ${stdin ? stdin.split('\n').slice(0, 10).join('\n') : '(none)'}
       error: 'Failed to compile code',
       message: error.message 
     });
+  }
+});
+
+function generateJavaDriver({ title, codeSnippets, exampleTestcases }) {
+  const javaCode = codeSnippets?.find(s => s.langSlug === 'java')?.code || '';
+  const methodMatch = javaCode.match(/public\s+([\w\[\]<>]+)\s+(\w+)\s*\(([^)]*)\)/);
+  const safeTitle = (title || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+
+  if (!methodMatch) {
+    return `class Main {\n    public static void main(String[] args) throws Exception {\n        Solution sol = new Solution();\n        System.out.println("${safeTitle}: implement your solution above!");\n    }\n}`;
+  }
+
+  const [, returnType, methodName, paramsStr] = methodMatch;
+  const params = paramsStr.split(',').map(p => p.trim()).filter(Boolean);
+  const paramCount = params.length;
+
+  function toJavaLiteral(line) {
+    line = line.trim();
+    if (line.startsWith('[[')) {
+      const inner = line.slice(2, -2);
+      const rows = inner.split('],[').map(r => `{${r}}`);
+      return `new int[][]{ ${rows.join(', ')} }`;
+    }
+    if (line.startsWith('[')) {
+      const inner = line.slice(1, -1);
+      if (!inner) return 'new int[]{}';
+      if (inner.startsWith('"')) return `new String[]{${inner}}`;
+      return `new int[]{${inner}}`;
+    }
+    return line;
+  }
+
+  function wrapPrint(callExpr) {
+    if (returnType === 'void') return `        ${callExpr};`;
+    if (returnType.includes('[][]')) return `        System.out.println(java.util.Arrays.deepToString(${callExpr}));`;
+    if (returnType.endsWith('[]')) return `        System.out.println(java.util.Arrays.toString(${callExpr}));`;
+    return `        System.out.println(${callExpr});`;
+  }
+
+  const exLines = (exampleTestcases || '').split('\n').map(l => l.trim()).filter(Boolean);
+  let testCalls = '';
+  for (let i = 0; i + paramCount <= exLines.length; i += paramCount) {
+    const group = exLines.slice(i, i + paramCount);
+    const args = group.map(l => toJavaLiteral(l)).join(', ');
+    const n = i / paramCount + 1;
+    testCalls += `\n        // Example ${n}\n${wrapPrint(`sol.${methodName}(${args})`)}\n`;
+  }
+  if (!testCalls) testCalls = `\n        // TODO: sol.${methodName}(...);\n`;
+
+  return `class Main {\n    public static void main(String[] args) throws Exception {\n        Solution sol = new Solution();\n        // Problem: ${safeTitle}\n${testCalls}    }\n}`;
+}
+
+// LeetCode single problem endpoint
+app.get('/api/problem/:slug', async (req, res) => {
+  try {
+    const { LeetCode } = await import('leetcode-query');
+    const lc = new LeetCode();
+    const problem = await lc.problem(req.params.slug);
+    const javaTemplate = problem.codeSnippets?.find(s => s.langSlug === 'java')?.code || '';
+    const driverCode = generateJavaDriver(problem);
+    res.json({
+      title: problem.title,
+      difficulty: problem.difficulty,
+      content: problem.content,
+      topicTags: problem.topicTags,
+      exampleTestcases: problem.exampleTestcases,
+      javaTemplate,
+      driverCode,
+    });
+  } catch (err) {
+    console.error('LeetCode problem error:', err);
+    res.status(500).json({ error: 'Failed to fetch problem', message: err?.message });
+  }
+});
+
+// LeetCode problems proxy endpoint
+app.get('/api/problems', async (req, res) => {
+  try {
+    const { LeetCode } = await import('leetcode-query');
+    const lc = new LeetCode();
+    const limit = Math.min(parseInt(req.query.limit) || 200, 500);
+    const offset = parseInt(req.query.offset) || 0;
+    const data = await lc.problems({ limit, offset });
+    res.json(data);
+  } catch (err) {
+    console.error('LeetCode problems error:', err);
+    res.status(500).json({ error: 'Failed to fetch problems', message: err?.message });
   }
 });
 

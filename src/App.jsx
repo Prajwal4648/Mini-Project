@@ -1,10 +1,22 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Moon, Sun, Save, Upload, Code2, Maximize2, Minimize2, Layout, Monitor, AlertCircle, CheckCircle } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { Play, Moon, Sun, Code2, AlertCircle, CheckCircle, BookOpen, Loader2, Brain } from 'lucide-react';
 import Split from 'react-split';
-import { useMediaQuery } from './utils/useMediaQuery';
 import AIReviewPane from "./components/AIReviewPane";
 
+const DIFFICULTY_COLORS = {
+  Easy: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
+  Medium: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
+  Hard: 'bg-red-500/20 text-red-400 border-red-500/30',
+};
+const DIFFICULTY_COLORS_LIGHT = {
+  Easy: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+  Medium: 'bg-amber-100 text-amber-700 border-amber-200',
+  Hard: 'bg-red-100 text-red-700 border-red-200',
+};
+
 export default function App() {
+  const [searchParams] = useSearchParams();
   const [code, setCode] = useState(`public class HelloWorld {
     public static void main(String[] args) {
         System.out.println("Hello, World!");
@@ -25,9 +37,8 @@ export default function App() {
   const [isCompiling, setIsCompiling] = useState(false);
   const [compileStatus, setCompileStatus] = useState(null); // 'success', 'error', null
   const [isDark, setIsDark] = useState(true);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [layout, setLayout] = useState('horizontal');
-  const isLg = useMediaQuery('(min-width: 1024px)');
+  const [leftTab, setLeftTab] = useState('description');
+  const [rightTab, setRightTab] = useState('output');
   // AI review state
   const [aiAnalysis, setAiAnalysis] = useState(null); // { issues, improvements, complexity, hints }
   const [aiLoading, setAiLoading] = useState(false);
@@ -40,8 +51,34 @@ export default function App() {
   const [aiLiveLoading, setAiLiveLoading] = useState(false);
   const reviewDebounceRef = useRef(null);
 
+  // Problem state
+  const [problem, setProblem] = useState(null);       // { title, difficulty, content, topicTags, ... }
+  const [hiddenDriverCode, setHiddenDriverCode] = useState('');
+  const [showProblemPane, setShowProblemPane] = useState(true);
+  const [problemLoading, setProblemLoading] = useState(false);
+
+  // Fetch problem when URL param changes
+  useEffect(() => {
+    const slug = searchParams.get('problem');
+    if (!slug) { setProblem(null); setHiddenDriverCode(''); return; }
+    setProblemLoading(true);
+    fetch(`http://localhost:3001/api/problem/${slug}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) throw new Error(data.message || data.error);
+        setProblem(data);
+        setHiddenDriverCode(data.driverCode || '');
+        setCode(data.javaTemplate || code);
+        setOutput('');
+        setCompileStatus(null);
+      })
+      .catch(err => console.error('Problem fetch error:', err))
+      .finally(() => setProblemLoading(false));
+  }, [searchParams]);
+
   const compileAndRun = async () => {
     setIsCompiling(true);
+    setRightTab('output');
     setOutput('Compiling and running your Java code...\n');
     setCompileStatus(null);
 
@@ -50,13 +87,14 @@ export default function App() {
       console.log('Code length:', code.length);
       
       // Use local backend server to avoid CORS issues
+      const fullCode = hiddenDriverCode ? `${code}\n\n${hiddenDriverCode}` : code;
       const response = await fetch('http://localhost:3001/api/compile', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          code: code,
+          code: fullCode,
           language: 'java',
           versionIndex: '4',
           stdin
@@ -114,18 +152,6 @@ Or run both frontend and backend together:
     } finally {
       setIsCompiling(false);
     }
-  };
-
-  const toggleTheme = () => {
-    setIsDark(!isDark);
-  };
-
-  const toggleFullscreen = () => {
-    setIsFullscreen(!isFullscreen);
-  };
-
-  const toggleLayout = () => {
-    setLayout(prev => prev === 'horizontal' ? 'vertical' : 'horizontal');
   };
 
   // Call backend Gemini API for structured review
@@ -194,303 +220,280 @@ Or run both frontend and backend together:
     return `Quick review\n${tips.join('\n')}`;
   })();
 
+  const tabCls = (active) =>
+    `px-4 py-2.5 text-xs font-medium border-b-2 transition-colors whitespace-nowrap ${
+      active
+        ? isDark ? 'border-blue-500 text-blue-400 bg-transparent' : 'border-blue-600 text-blue-600 bg-transparent'
+        : isDark ? 'border-transparent text-slate-400 hover:text-slate-200' : 'border-transparent text-slate-500 hover:text-slate-700'
+    }`;
+
+  const panelBg   = isDark ? 'bg-slate-900'  : 'bg-white';
+  const barBg     = isDark ? 'bg-slate-900 border-slate-800'  : 'bg-slate-50 border-slate-200';
+  const divider   = isDark ? 'border-slate-800' : 'border-slate-200';
+  const muted     = isDark ? 'text-slate-400'   : 'text-slate-500';
+
   return (
-    <div className={`min-h-screen transition-colors duration-300 ${
-      isDark ? 'bg-slate-950' : 'bg-slate-50'
-    }`}>
-      {/* Navbar */}
-      <nav className={`border-b transition-colors duration-300 ${
-        isDark 
-          ? 'bg-slate-900/80 border-slate-800 backdrop-blur-xl' 
-          : 'bg-white/80 border-slate-200 backdrop-blur-xl'
-      }`}>
-        <div className="max-w-full px-3 sm:px-6 py-3 sm:py-4">
-          <div className="flex items-center justify-between">
-            {/* Logo */}
-            <div className="flex items-center gap-2 sm:gap-3">
-              <div className={`p-1.5 sm:p-2 rounded-lg transition-all duration-300 ${
-                isDark 
-                  ? 'bg-gradient-to-br from-blue-500 to-purple-600' 
-                  : 'bg-gradient-to-br from-blue-600 to-purple-700'
-              }`}>
-                <Code2 className="w-4 h-4 sm:w-6 sm:h-6 text-white" />
-              </div>
-              <div className="hidden sm:block">
-                <h1 className={`text-lg sm:text-xl font-bold transition-colors duration-300 ${
-                  isDark ? 'text-white' : 'text-slate-900'
-                }`}>
-                  CodeReviewX
-                </h1>
-                <p className={`text-xs transition-colors duration-300 ${
-                  isDark ? 'text-slate-400' : 'text-slate-500'
-                }`}>
-                  Java Code Editor
-                </p>
-              </div>
-              <h1 className={`sm:hidden text-base font-bold transition-colors duration-300 ${
-                isDark ? 'text-white' : 'text-slate-900'
-              }`}>
-                CodeReviewX
-              </h1>
-            </div>
+    <div className={`h-screen flex flex-col overflow-hidden ${isDark ? 'bg-slate-950' : 'bg-slate-100'}`}>
 
-            {/* Controls */}
-            <div className="flex items-center gap-1 sm:gap-2">
-              <button
-                onClick={compileAndRun}
-                disabled={isCompiling}
-                className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 ${
-                  isDark
-                    ? 'bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white shadow-lg shadow-blue-500/50'
-                    : 'bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white shadow-lg shadow-blue-600/50'
-                }`}
-              >
-                <Play className={`w-3 h-3 sm:w-4 sm:h-4 ${isCompiling ? 'animate-spin' : ''}`} />
-                <span className="hidden sm:inline">{isCompiling ? 'Running...' : 'Run'}</span>
-              </button>
-
-              <button
-                onClick={toggleLayout}
-                className={`p-1.5 sm:p-2 rounded-lg transition-all duration-200 hover:scale-105 ${
-                  isDark
-                    ? 'bg-slate-800 hover:bg-slate-700 text-slate-300'
-                    : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                }`}
-                title="Toggle Layout"
-              >
-                {layout === 'horizontal' ? <Layout className="w-4 h-4 sm:w-5 sm:h-5" /> : <Monitor className="w-4 h-4 sm:w-5 sm:h-5" />}
-              </button>
-
-              <button
-                className={`hidden sm:block p-2 rounded-lg transition-all duration-200 hover:scale-105 ${
-                  isDark
-                    ? 'bg-slate-800 hover:bg-slate-700 text-slate-300'
-                    : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                }`}
-                title="Save Code"
-              >
-                <Save className="w-5 h-5" />
-              </button>
-
-              <button
-                className={`hidden sm:block p-2 rounded-lg transition-all duration-200 hover:scale-105 ${
-                  isDark
-                    ? 'bg-slate-800 hover:bg-slate-700 text-slate-300'
-                    : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                }`}
-                title="Upload File"
-              >
-                <Upload className="w-5 h-5" />
-              </button>
-
-              <button
-                onClick={toggleFullscreen}
-                className={`hidden md:block p-2 rounded-lg transition-all duration-200 hover:scale-105 ${
-                  isDark
-                    ? 'bg-slate-800 hover:bg-slate-700 text-slate-300'
-                    : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                }`}
-                title="Toggle Fullscreen"
-              >
-                {isFullscreen ? <Minimize2 className="w-5 h-5" /> : <Maximize2 className="w-5 h-5" />}
-              </button>
-
-              <button
-                onClick={toggleTheme}
-                className={`p-1.5 sm:p-2 rounded-lg transition-all duration-200 hover:scale-105 ${
-                  isDark
-                    ? 'bg-slate-800 hover:bg-slate-700 text-yellow-400'
-                    : 'bg-slate-100 hover:bg-slate-200 text-blue-600'
-                }`}
-                title="Toggle Theme"
-              >
-                {isDark ? <Sun className="w-4 h-4 sm:w-5 sm:h-5" /> : <Moon className="w-4 h-4 sm:w-5 sm:h-5" />}
-              </button>
-            </div>
+      {/* ── NAVBAR ─────────────────────────────────────── */}
+      <nav className={`shrink-0 h-12 flex items-center px-4 gap-3 border-b ${barBg}`}>
+        {/* Logo */}
+        <div className="flex items-center gap-2 shrink-0">
+          <div className="p-1.5 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600">
+            <Code2 className="w-4 h-4 text-white" />
           </div>
+          <span className={`hidden sm:block font-bold text-sm ${isDark ? 'text-white' : 'text-slate-900'}`}>
+            CodeReviewX
+          </span>
+        </div>
+
+        {/* Problem title + difficulty */}
+        {(problem || problemLoading) && (
+          <div className={`hidden md:flex items-center gap-2 px-3 py-1 rounded-lg border ${isDark ? 'border-slate-700 bg-slate-800/50' : 'border-slate-200 bg-slate-100'}`}>
+            {problemLoading
+              ? <Loader2 className={`w-3.5 h-3.5 animate-spin ${isDark ? 'text-blue-400' : 'text-blue-600'}`} />
+              : <>
+                  <span className={`text-xs font-medium max-w-[220px] truncate ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>{problem?.title}</span>
+                  {problem?.difficulty && (
+                    <span className={`shrink-0 text-xs px-1.5 py-0.5 rounded border font-semibold ${(isDark ? DIFFICULTY_COLORS : DIFFICULTY_COLORS_LIGHT)[problem.difficulty]}`}>
+                      {problem.difficulty}
+                    </span>
+                  )}
+                </>
+            }
+          </div>
+        )}
+
+        {/* Spacer */}
+        <div className="ml-auto flex items-center gap-2">
+          <Link
+            to="/problems"
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${isDark ? 'bg-slate-800 hover:bg-slate-700 text-slate-300' : 'bg-slate-200 hover:bg-slate-300 text-slate-700'}`}
+          >
+            <BookOpen className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Problems</span>
+          </Link>
+
+          <button
+            onClick={compileAndRun}
+            disabled={isCompiling}
+            className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white transition-colors"
+          >
+            <Play className={`w-3.5 h-3.5 ${isCompiling ? 'animate-spin' : ''}`} />
+            {isCompiling ? 'Running...' : 'Run'}
+          </button>
+
+          <button
+            onClick={() => setIsDark(d => !d)}
+            className={`p-1.5 rounded-lg transition-colors ${isDark ? 'bg-slate-800 hover:bg-slate-700 text-yellow-400' : 'bg-slate-200 hover:bg-slate-300 text-blue-600'}`}
+          >
+            {isDark
+              ? <Sun className="w-4 h-4" />
+              : <Moon className="w-4 h-4" />}
+          </button>
         </div>
       </nav>
 
-      {/* Main Workspace */}
-      <div className={`flex transition-all duration-300 overflow-x-hidden ${
-        isFullscreen ? 'h-screen' : 'h-[calc(100vh-60px)] sm:h-[calc(100vh-80px)]'
-      }`}>
-        {isFullscreen ? (
-          // Fullscreen editor only
-          <div className={`w-full h-full ${isDark ? 'border-slate-800' : 'border-slate-200'}`}>
-            <div className={`h-10 sm:h-12 flex items-center justify-between px-3 sm:px-4 border-b ${
-              isDark ? 'bg-slate-900 border-slate-800 text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-600'
-            }`}>
-              <div className="flex items-center gap-2">
-                <div className="hidden sm:flex gap-1.5">
-                  <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-red-500"></div>
-                  <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-yellow-500"></div>
-                  <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-green-500"></div>
+      {/* ── 3-PANEL WORKSPACE ──────────────────────────── */}
+      <div className="flex-1 min-h-0">
+        <Split
+          className="flex h-full"
+          sizes={[28, 44, 28]}
+          minSize={[220, 280, 220]}
+          gutterSize={5}
+          direction="horizontal"
+          gutterStyle={() => ({
+            backgroundColor: isDark ? '#1e293b' : '#e2e8f0',
+            cursor: 'col-resize',
+          })}
+        >
+
+          {/* ── LEFT: Question Panel ──────────────────── */}
+          <div className={`flex flex-col h-full overflow-hidden border-r ${divider} ${panelBg}`}>
+            {/* Tab bar */}
+            <div className={`shrink-0 flex items-center border-b ${barBg}`}>
+              <button className={tabCls(leftTab === 'description')} onClick={() => setLeftTab('description')}>Description</button>
+              <button className={tabCls(leftTab === 'examples')}    onClick={() => setLeftTab('examples')}>Examples</button>
+              {problem?.topicTags?.slice(0, 2).map(t => (
+                <span key={t.slug} className={`hidden lg:inline-block ml-1 text-xs px-2 py-0.5 rounded-full ${isDark ? 'bg-slate-800 text-slate-500' : 'bg-slate-100 text-slate-400'}`}>{t.name}</span>
+              ))}
+            </div>
+
+            {/* Content */}
+            <div className={`flex-1 overflow-y-auto p-4 ${panelBg}`}>
+              {problemLoading && (
+                <div className="flex flex-col items-center justify-center h-40 gap-3">
+                  <Loader2 className={`w-6 h-6 animate-spin ${isDark ? 'text-blue-400' : 'text-blue-600'}`} />
+                  <span className={`text-sm ${muted}`}>Loading problem...</span>
                 </div>
-                <span className="text-xs sm:text-sm font-medium sm:ml-3">Main.java</span>
+              )}
+
+              {!problem && !problemLoading && (
+                <div className={`flex flex-col items-center justify-center h-40 text-center gap-3 ${muted}`}>
+                  <BookOpen className="w-10 h-10 opacity-30" />
+                  <p className="text-sm font-medium">No problem selected</p>
+                  <p className="text-xs">
+                    Browse the{' '}
+                    <Link to="/problems" className={`underline ${isDark ? 'text-blue-400' : 'text-blue-600'}`}>
+                      Problems
+                    </Link>{' '}
+                    page and click any question
+                  </p>
+                </div>
+              )}
+
+              {problem && leftTab === 'description' && (
+                <div
+                  className={`prose prose-sm max-w-none leading-relaxed ${
+                    isDark
+                      ? 'prose-invert text-slate-300 [&_code]:bg-slate-800 [&_code]:text-blue-300 [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[0.8em] [&_pre]:bg-slate-800 [&_pre]:rounded-lg [&_strong]:text-white [&_p]:text-slate-300 [&_li]:text-slate-300'
+                      : 'text-slate-700 [&_code]:bg-slate-100 [&_code]:text-blue-700 [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[0.8em]'
+                  }`}
+                  dangerouslySetInnerHTML={{ __html: problem.content }}
+                />
+              )}
+
+              {leftTab === 'examples' && !problemLoading && (
+                <div className="space-y-4">
+                  {problem?.exampleTestcases
+                    ? problem.exampleTestcases.split('\n').filter(Boolean).map((line, i) => (
+                        <div key={i} className={`rounded-xl border p-3 ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
+                          <p className={`text-[10px] font-semibold uppercase tracking-wider mb-1.5 ${muted}`}>Input {i + 1}</p>
+                          <pre className={`font-mono text-xs ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>{line}</pre>
+                        </div>
+                      ))
+                    : <p className={`text-sm ${muted}`}>No examples available.</p>
+                  }
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── MIDDLE: Code Editor ───────────────────── */}
+          <div className={`flex flex-col h-full overflow-hidden ${isDark ? 'bg-slate-950' : 'bg-white'}`}>
+            {/* Editor header bar */}
+            <div className={`shrink-0 flex items-center justify-between px-3 py-2 border-b ${barBg}`}>
+              <div className="flex items-center gap-2">
+                <span className="flex gap-1.5">
+                  <span className="w-3 h-3 rounded-full bg-red-500"></span>
+                  <span className="w-3 h-3 rounded-full bg-yellow-500"></span>
+                  <span className="w-3 h-3 rounded-full bg-green-500"></span>
+                </span>
+                <span className={`text-xs font-medium ml-1 ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
+                  Solution.java
+                </span>
               </div>
-              <div className="text-xs flex items-center gap-3">
-                <span className={`px-2 py-1 rounded ${isDark ? 'bg-orange-500/20 text-orange-400' : 'bg-orange-100 text-orange-700'}`}>
-                  Java
-                </span>
-                <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>
-                  {code.split('\n').length} lines
-                </span>
+              <div className="flex items-center gap-3 text-xs">
+                <span className={`px-2 py-0.5 rounded font-medium ${isDark ? 'bg-orange-500/20 text-orange-400' : 'bg-orange-100 text-orange-700'}`}>Java</span>
+                <span className={muted}>{code.split('\n').length} lines</span>
               </div>
             </div>
-            <div className={`h-[calc(100%-40px)] sm:h-[calc(100%-48px)] ${isDark ? 'bg-slate-900' : 'bg-white'}`}>
+
+            {/* Textarea */}
+            <div className={`relative flex-1 min-h-0 overflow-hidden ${isDark ? 'bg-[#0f172a]' : 'bg-white'}`}>
               <textarea
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
-                className={`w-full h-full p-2 sm:p-4 font-mono text-xs sm:text-sm resize-none focus:outline-none overflow-auto overflow-x-auto whitespace-pre ${
-                  isDark ? 'bg-slate-900 text-slate-100' : 'bg-white text-slate-900'
+                className={`w-full h-full p-4 font-mono text-sm resize-none focus:outline-none overflow-auto whitespace-pre ${
+                  isDark ? 'bg-[#0f172a] text-slate-100 caret-blue-400' : 'bg-white text-slate-900'
                 }`}
-                style={{ fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace", lineHeight: '1.6', tabSize: 4 }}
+                style={{ fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace", lineHeight: '1.7', tabSize: 4 }}
                 wrap="off"
                 spellCheck={false}
-                placeholder="Write your Java code here..."
+                placeholder="Write your Java solution here..."
               />
+              {/* Live annotation dots */}
+              {enableLiveReview && lineAnnotations.length > 0 && (
+                <div className="pointer-events-none absolute top-0 left-1 w-4 h-full select-none">
+                  {lineAnnotations.map((a) => (
+                    <div
+                      key={`mark-${a.line}`}
+                      style={{ position: 'absolute', top: `calc(${a.line - 1} * 1.7em + 1rem)` }}
+                      className={`w-4 h-[1.5em] flex items-center justify-center text-[10px] ${a.severity === 'error' ? 'text-red-500' : a.severity === 'warning' ? 'text-yellow-400' : 'text-blue-400'}`}
+                      title={`Line ${a.line}: ${a.issue || a.suggestion || ''}`}
+                    >●</div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
-        ) : (
-          // Responsive resizable splits: outer (left/right), inner (editor/output)
-          <Split
-            className="flex w-full h-full flex-col lg:flex-row overflow-hidden"
-            sizes={[70, 30]}
-            minSize={[250, 200]}
-            gutterSize={8}
-            direction={isLg ? 'horizontal' : 'vertical'}
-          >
-            {/* Left column with vertical split */}
-            <Split
-              className={`flex flex-col h-full lg:border-r min-w-0 min-h-0 ${isDark ? 'border-slate-800' : 'border-slate-200'}`}
-              sizes={[50, 50]}
-              minSize={[150, 120]}
-              gutterSize={8}
-              direction="vertical"
-            >
-              {/* Editor (flex column for dynamic vertical resize) */}
-              <div className={`flex flex-col h-full min-h-0 ${isDark ? 'border-slate-800' : 'border-slate-200'}`}>
-                <div className={`flex-shrink-0 h-10 sm:h-12 flex items-center justify-between px-3 sm:px-4 border-b ${
-                  isDark ? 'bg-slate-900 border-slate-800 text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-600'
-                }`}>
-                  <div className="flex items-center gap-2">
-                    <div className="hidden sm:flex gap-1.5">
-                      <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-red-500"></div>
-                      <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-yellow-500"></div>
-                      <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-green-500"></div>
-                    </div>
-                    <span className="text-xs sm:text-sm font-medium sm:ml-3">Main.java</span>
-                  </div>
-                  <div className="text-xs flex items-center gap-3">
-                    <span className={`px-2 py-1 rounded ${isDark ? 'bg-orange-500/20 text-orange-400' : 'bg-orange-100 text-orange-700'}`}>
-                      Java
-                    </span>
-                    <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>
-                      {code.split('\n').length} lines
-                    </span>
-                  </div>
-                </div>
-                <div className={`relative flex-1 min-h-0 ${isDark ? 'bg-slate-900' : 'bg-white'} overflow-hidden`}> 
-                  <textarea
-                    value={code}
-                    onChange={(e) => setCode(e.target.value)}
-                    className={`w-full h-full p-2 sm:p-4 font-mono text-xs sm:text-sm resize-none focus:outline-none overflow-auto overflow-x-auto whitespace-pre ${
-                      isDark ? 'bg-slate-900 text-slate-100' : 'bg-white text-slate-900'
-                    }`}
-                    style={{ fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace", lineHeight: '1.6', tabSize: 4 }}
-                    wrap="off"
-                    spellCheck={false}
-                    placeholder="Write your Java code here..."
-                  />
-                  {enableLiveReview && lineAnnotations.length > 0 && (
-                    <div className="pointer-events-none absolute top-10 sm:top-12 left-0 h-[calc(100%-40px)] sm:h-[calc(100%-48px)] w-6 select-none text-[10px] font-mono">
-                      <div className="relative w-full h-full">
-                        {lineAnnotations.map((a) => (
-                          <div
-                            key={`mark-${a.line}`}
-                            style={{ top: (a.line - 1) * 1.6 + 'em' }}
-                            className={`absolute left-0 w-6 h-[1.4em] flex items-center justify-center ${
-                              a.severity === 'error' ? 'text-red-500' : a.severity === 'warning' ? 'text-yellow-500' : 'text-blue-500'
-                            }`}
-                            title={(a.issue || a.suggestion || 'Info') + ` (line ${a.line})`}
-                          >
-                            ●
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-              {/* Output */}
-              <div className={`flex flex-col h-full min-h-0 ${isDark ? 'border-t border-slate-800' : 'border-t border-slate-200'} m-0 min-w-0`}> 
-                <div className={`h-10 sm:h-12 flex items-center justify-between px-3 sm:px-4 border-b ${
-                  isDark ? 'bg-slate-900 border-slate-800 text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-600'
-                }`}>
-                  <span className="text-xs sm:text-sm font-medium">Console Output</span>
-                  <div className="flex items-center gap-2">
-                    {compileStatus === 'success' && (
-                      <>
-                        <CheckCircle className="w-4 h-4 text-green-500" />
-                        <span className="text-xs text-green-500">Success</span>
-                      </>
-                    )}
-                    {compileStatus === 'error' && (
-                      <>
-                        <AlertCircle className="w-4 h-4 text-red-500" />
-                        <span className="text-xs text-red-500">Error</span>
-                      </>
-                    )}
-                    {isCompiling && (
-                      <>
-                        <div className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full animate-pulse ${
-                          isDark ? 'bg-blue-500' : 'bg-blue-600'
-                        }`}></div>
-                        <span className="text-xs">Running</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-                {/* stdin input */}
-                <div className={`${isDark ? 'bg-slate-950' : 'bg-slate-50'} px-3 sm:px-4 pt-2`}> 
-                  <label className="block text-[10px] sm:text-xs font-medium opacity-70 mb-1">Program Input (stdin)</label>
+
+          {/* ── RIGHT: Output + AI Review ─────────────── */}
+          <div className={`flex flex-col h-full overflow-hidden border-l ${divider} ${isDark ? 'bg-slate-950' : 'bg-white'}`}>
+            {/* Tab bar */}
+            <div className={`shrink-0 flex items-center border-b ${barBg}`}>
+              <button className={tabCls(rightTab === 'output')} onClick={() => setRightTab('output')}>
+                Output
+              </button>
+              <button
+                className={`${tabCls(rightTab === 'ai')} flex items-center gap-1`}
+                onClick={() => setRightTab('ai')}
+              >
+                <Brain className="w-3 h-3" /> AI Review
+              </button>
+              {/* Status badge */}
+              <span className="ml-auto mr-3 flex items-center gap-1.5">
+                {isCompiling && <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />}
+                {compileStatus === 'success' && !isCompiling && <CheckCircle className="w-3.5 h-3.5 text-green-500" />}
+                {compileStatus === 'error'   && !isCompiling && <AlertCircle  className="w-3.5 h-3.5 text-red-500"   />}
+              </span>
+            </div>
+
+            {/* Output tab */}
+            {rightTab === 'output' && (
+              <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+                {/* stdin */}
+                <div className={`shrink-0 border-b px-3 py-2.5 ${isDark ? 'bg-slate-900 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
+                  <label className={`block text-[10px] font-semibold uppercase tracking-wider mb-1.5 ${muted}`}>
+                    Program Input (stdin)
+                  </label>
                   <textarea
                     value={stdin}
                     onChange={(e) => setStdin(e.target.value)}
-                    placeholder="Enter input lines your program reads (Scanner, BufferedReader, etc.)"
-                    className={`w-full text-[11px] sm:text-xs rounded-md border p-2 resize-y min-h-[60px] focus:outline-none ${
-                      isDark ? 'bg-slate-900 border-slate-800 text-slate-200 placeholder-slate-600' : 'bg-white border-slate-300 text-slate-700 placeholder-slate-400'
+                    placeholder="Enter input for your program..."
+                    rows={2}
+                    className={`w-full text-xs font-mono rounded-lg border px-3 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-blue-500/40 ${
+                      isDark ? 'bg-slate-800 border-slate-700 text-slate-200 placeholder-slate-600' : 'bg-white border-slate-200 text-slate-700 placeholder-slate-400'
                     }`}
                     spellCheck={false}
                   />
                 </div>
-                <div className={`flex-1 min-h-0 overflow-auto ${isDark ? 'bg-slate-950' : 'bg-slate-50'} p-0 m-0 min-w-0`}> 
-                  <pre className={`w-full h-full p-3 sm:p-4 font-mono text-xs sm:text-sm whitespace-pre-wrap break-words ${
-                    isDark ? 'text-slate-300' : 'text-slate-700'
-                  }`}> 
-{output || 'Click "Run" to compile and execute your Java code...'}
+                {/* Console output */}
+                <div className={`shrink-0 flex items-center justify-between px-3 py-1.5 border-b ${barBg}`}>
+                  <span className={`text-[10px] font-semibold uppercase tracking-wider ${muted}`}>Console</span>
+                  {compileStatus === 'success' && <span className="text-[10px] font-medium text-green-500 flex items-center gap-1"><CheckCircle className="w-3 h-3" />Passed</span>}
+                  {compileStatus === 'error'   && <span className="text-[10px] font-medium text-red-500   flex items-center gap-1"><AlertCircle  className="w-3 h-3" />Error</span>}
+                </div>
+                <div className={`flex-1 min-h-0 overflow-auto p-3 ${isDark ? 'bg-slate-950' : 'bg-white'}`}>
+                  <pre className={`font-mono text-xs whitespace-pre-wrap break-words leading-relaxed ${
+                    compileStatus === 'error' ? 'text-red-400' : isDark ? 'text-slate-300' : 'text-slate-700'
+                  }`}>
+                    {output || 'Click "Run" to compile and execute your code...'}
                   </pre>
                 </div>
               </div>
-            </Split>
-            {/* Right column: AI review */}
-            <div className="min-w-0 min-h-0 h-full overflow-hidden">
-              <AIReviewPane
-                review={aiReview}
-                analysis={aiAnalysis}
-                loading={aiLoading}
-                error={aiError}
-                onDeepReview={runAIReview}
-                lineAnnotations={lineAnnotations}
-                enableLiveReview={enableLiveReview}
-                setEnableLiveReview={setEnableLiveReview}
-                aiLiveLoading={aiLiveLoading}
-                isDark={isDark}
-              />
-            </div>
-          </Split>
-        )}
+            )}
+
+            {/* AI Review tab */}
+            {rightTab === 'ai' && (
+              <div className="flex-1 min-h-0 overflow-hidden">
+                <AIReviewPane
+                  review={aiReview}
+                  analysis={aiAnalysis}
+                  loading={aiLoading}
+                  error={aiError}
+                  onDeepReview={runAIReview}
+                  lineAnnotations={lineAnnotations}
+                  enableLiveReview={enableLiveReview}
+                  setEnableLiveReview={setEnableLiveReview}
+                  aiLiveLoading={aiLiveLoading}
+                  isDark={isDark}
+                />
+              </div>
+            )}
+          </div>
+
+        </Split>
       </div>
     </div>
   );
