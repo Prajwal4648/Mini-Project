@@ -246,31 +246,38 @@ ${stdin ? stdin.split('\n').slice(0, 10).join('\n') : '(none)'}
   }
 });
 
+function parseExamples(exampleTestcases, paramCount) {
+  const exLines = (exampleTestcases || '').split('\n').map(l => l.trim()).filter(Boolean);
+  const groups = [];
+  if (paramCount < 1) return groups;
+  for (let i = 0; i + paramCount <= exLines.length; i += paramCount) {
+    groups.push(exLines.slice(i, i + paramCount));
+  }
+  return groups;
+}
+
 function generateJavaDriver({ title, codeSnippets, exampleTestcases }) {
   const javaCode = codeSnippets?.find(s => s.langSlug === 'java')?.code || '';
   const methodMatch = javaCode.match(/public\s+([\w\[\]<>]+)\s+(\w+)\s*\(([^)]*)\)/);
   const safeTitle = (title || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 
   if (!methodMatch) {
-    return `class Main {\n    public static void main(String[] args) throws Exception {\n        Solution sol = new Solution();\n        System.out.println("${safeTitle}: implement your solution above!");\n    }\n}`;
+    return `public class Main {\n    public static void main(String[] args) throws Exception {\n        Solution sol = new Solution();\n        System.out.println("${safeTitle}: implement your solution above!");\n    }\n}`;
   }
 
   const [, returnType, methodName, paramsStr] = methodMatch;
-  const params = paramsStr.split(',').map(p => p.trim()).filter(Boolean);
-  const paramCount = params.length;
+  const paramCount = paramsStr.split(',').map(p => p.trim()).filter(Boolean).length;
 
   function toJavaLiteral(line) {
     line = line.trim();
     if (line.startsWith('[[')) {
-      const inner = line.slice(2, -2);
-      const rows = inner.split('],[').map(r => `{${r}}`);
+      const rows = line.slice(2, -2).split('],[').map(r => `{${r}}`);
       return `new int[][]{ ${rows.join(', ')} }`;
     }
     if (line.startsWith('[')) {
       const inner = line.slice(1, -1);
       if (!inner) return 'new int[]{}';
-      if (inner.startsWith('"')) return `new String[]{${inner}}`;
-      return `new int[]{${inner}}`;
+      return inner.startsWith('"') ? `new String[]{${inner}}` : `new int[]{${inner}}`;
     }
     return line;
   }
@@ -282,17 +289,46 @@ function generateJavaDriver({ title, codeSnippets, exampleTestcases }) {
     return `        System.out.println(${callExpr});`;
   }
 
-  const exLines = (exampleTestcases || '').split('\n').map(l => l.trim()).filter(Boolean);
-  let testCalls = '';
-  for (let i = 0; i + paramCount <= exLines.length; i += paramCount) {
-    const group = exLines.slice(i, i + paramCount);
-    const args = group.map(l => toJavaLiteral(l)).join(', ');
-    const n = i / paramCount + 1;
-    testCalls += `\n        // Example ${n}\n${wrapPrint(`sol.${methodName}(${args})`)}\n`;
-  }
-  if (!testCalls) testCalls = `\n        // TODO: sol.${methodName}(...);\n`;
+  const groups = parseExamples(exampleTestcases, paramCount);
+  let testCalls = groups.map((g, i) =>
+    `\n        // Example ${i + 1}\n${wrapPrint(`sol.${methodName}(${g.map(toJavaLiteral).join(', ')})`)}`
+  ).join('\n');
+  if (!testCalls) testCalls = `\n        // TODO: sol.${methodName}(...);`;
 
-  return `class Main {\n    public static void main(String[] args) throws Exception {\n        Solution sol = new Solution();\n        // Problem: ${safeTitle}\n${testCalls}    }\n}`;
+  return `public class Main {\n    public static void main(String[] args) throws Exception {\n        Solution sol = new Solution();\n        // ${safeTitle}\n${testCalls}\n    }\n}`;
+}
+
+function generatePythonDriver({ title, codeSnippets, exampleTestcases }) {
+  const pyCode = codeSnippets?.find(s => s.langSlug === 'python3')?.code || '';
+  const methodMatch = pyCode.match(/def\s+(\w+)\s*\(self(?:,\s*([^)]*))?\)/);
+  if (!methodMatch) return `sol = Solution()\nprint("${title}: implement your solution!")`;
+
+  const methodName = methodMatch[1];
+  const paramCount = methodMatch[2] ? methodMatch[2].split(',').filter(s => s.trim()).length : 0;
+  const groups = parseExamples(exampleTestcases, paramCount);
+  const calls = groups.map((g, i) =>
+    `# Example ${i + 1}\nprint(sol.${methodName}(${g.join(', ')}))`
+  ).join('\n');
+
+  return `# === Driver ===\nsol = Solution()\n${calls || `# TODO: print(sol.${methodName}(...))`}`;
+}
+
+function generateCppDriver({ title, codeSnippets, exampleTestcases }) {
+  const cppCode = codeSnippets?.find(s => s.langSlug === 'cpp')?.code || '';
+  const methodMatch = cppCode.match(/[\w:<>*]+\s+(\w+)\s*\([^)]*\)\s*\{/);
+  const methodName = methodMatch?.[1] || 'solve';
+  return `int main() {\n    Solution sol;\n    // ${title}\n    // TODO: sol.${methodName}(...);\n    return 0;\n}`;
+}
+
+function generateJSDriver({ title, codeSnippets, exampleTestcases }) {
+  const jsCode = codeSnippets?.find(s => s.langSlug === 'javascript')?.code || '';
+  const fnMatch = jsCode.match(/var\s+(\w+)\s*=\s*function|function\s+(\w+)\s*\(/);
+  const fnName = fnMatch?.[1] || fnMatch?.[2] || 'solution';
+  const exLines = (exampleTestcases || '').split('\n').map(l => l.trim()).filter(Boolean);
+  const calls = exLines.slice(0, 3).map((line, i) =>
+    `// Example ${i + 1}\nconsole.log(${fnName}(${line}));`
+  ).join('\n');
+  return `// === Driver ===\n${calls || `// TODO: console.log(${fnName}(...));`}`;
 }
 
 // LeetCode single problem endpoint
@@ -300,17 +336,38 @@ app.get('/api/problem/:slug', async (req, res) => {
   try {
     const { LeetCode } = await import('leetcode-query');
     const lc = new LeetCode();
-    const problem = await lc.problem(req.params.slug);
-    const javaTemplate = problem.codeSnippets?.find(s => s.langSlug === 'java')?.code || '';
-    const driverCode = generateJavaDriver(problem);
+    const p = await lc.problem(req.params.slug);
+
+    const raw = {
+      java:       p.codeSnippets?.find(s => s.langSlug === 'java')?.code || '',
+      python3:    p.codeSnippets?.find(s => s.langSlug === 'python3')?.code || '',
+      cpp:        p.codeSnippets?.find(s => s.langSlug === 'cpp')?.code || '',
+      javascript: p.codeSnippets?.find(s => s.langSlug === 'javascript')?.code || '',
+    };
+
+    // Prepend necessary headers so each template is self-contained
+    const templates = {
+      java:       raw.java,
+      python3:    raw.python3 ? `from typing import *\nfrom collections import *\nimport math\n\n${raw.python3}` : '',
+      cpp:        raw.cpp     ? `#include <bits/stdc++.h>\nusing namespace std;\n\n${raw.cpp}` : '',
+      javascript: raw.javascript,
+    };
+
+    const driverCodes = {
+      java:       generateJavaDriver(p),
+      python3:    generatePythonDriver(p),
+      cpp:        generateCppDriver(p),
+      javascript: generateJSDriver(p),
+    };
+
     res.json({
-      title: problem.title,
-      difficulty: problem.difficulty,
-      content: problem.content,
-      topicTags: problem.topicTags,
-      exampleTestcases: problem.exampleTestcases,
-      javaTemplate,
-      driverCode,
+      title:            p.title,
+      difficulty:       p.difficulty,
+      content:          p.content,
+      topicTags:        p.topicTags,
+      exampleTestcases: p.exampleTestcases,
+      templates,
+      driverCodes,
     });
   } catch (err) {
     console.error('LeetCode problem error:', err);

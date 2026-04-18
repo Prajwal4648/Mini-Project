@@ -4,6 +4,32 @@ import { Play, Moon, Sun, Code2, AlertCircle, CheckCircle, BookOpen, Loader2, Br
 import Split from 'react-split';
 import AIReviewPane from "./components/AIReviewPane";
 
+const LANG_CONFIG = {
+  java:       { label: 'Java',       jdoodle: 'java',    version: '4', ext: 'java', badge: 'bg-orange-500/20 text-orange-400' },
+  python3:    { label: 'Python 3',   jdoodle: 'python3', version: '4', ext: 'py',   badge: 'bg-blue-500/20 text-blue-400'   },
+  cpp:        { label: 'C++17',      jdoodle: 'cpp17',   version: '1', ext: 'cpp',  badge: 'bg-purple-500/20 text-purple-400' },
+  javascript: { label: 'JavaScript', jdoodle: 'nodejs',  version: '4', ext: 'js',   badge: 'bg-yellow-500/20 text-yellow-400' },
+};
+
+const DEFAULT_CODE = {
+  java: `public class Main {
+    public static void main(String[] args) {
+        System.out.println("Hello, World!");
+    }
+}`,
+  python3: `# Python 3
+print("Hello, World!")`,
+  cpp: `#include <iostream>
+using namespace std;
+
+int main() {
+    cout << "Hello, World!" << endl;
+    return 0;
+}`,
+  javascript: `// JavaScript (Node.js)
+console.log("Hello, World!");`,
+};
+
 const DIFFICULTY_COLORS = {
   Easy: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
   Medium: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
@@ -17,21 +43,10 @@ const DIFFICULTY_COLORS_LIGHT = {
 
 export default function App() {
   const [searchParams] = useSearchParams();
-  const [code, setCode] = useState(`public class HelloWorld {
-    public static void main(String[] args) {
-        System.out.println("Hello, World!");
-        System.out.println("Welcome to CodeReviewX!");
-        
-        // Try some basic operations
-        int sum = 5 + 10;
-        System.out.println("5 + 10 = " + sum);
-        
-        // Loop example
-        for (int i = 1; i <= 5; i++) {
-            System.out.println("Count: " + i);
-        }
-    }
-}`);
+  const [language, setLanguage] = useState('java');
+  const [code, setCode] = useState(DEFAULT_CODE.java);
+  const [problemTemplates, setProblemTemplates] = useState({});
+  const [problemDrivers, setProblemDrivers]   = useState({});
   
   const [output, setOutput] = useState('');
   const [isCompiling, setIsCompiling] = useState(false);
@@ -60,21 +75,43 @@ export default function App() {
   // Fetch problem when URL param changes
   useEffect(() => {
     const slug = searchParams.get('problem');
-    if (!slug) { setProblem(null); setHiddenDriverCode(''); return; }
+    if (!slug) {
+      setProblem(null);
+      setProblemTemplates({});
+      setProblemDrivers({});
+      setHiddenDriverCode('');
+      setCode(DEFAULT_CODE[language]);
+      return;
+    }
     setProblemLoading(true);
     fetch(`http://localhost:3001/api/problem/${slug}`)
       .then(r => r.json())
       .then(data => {
         if (data.error) throw new Error(data.message || data.error);
         setProblem(data);
-        setHiddenDriverCode(data.driverCode || '');
-        setCode(data.javaTemplate || code);
+        setProblemTemplates(data.templates || {});
+        setProblemDrivers(data.driverCodes || {});
+        setCode(data.templates?.[language] || data.templates?.java || '');
+        setHiddenDriverCode(data.driverCodes?.[language] || data.driverCodes?.java || '');
         setOutput('');
         setCompileStatus(null);
       })
       .catch(err => console.error('Problem fetch error:', err))
       .finally(() => setProblemLoading(false));
   }, [searchParams]);
+
+  // Swap template + driver when user changes language
+  useEffect(() => {
+    if (problem) {
+      setCode(problemTemplates[language] || `// No ${LANG_CONFIG[language]?.label} template available for this problem.`);
+      setHiddenDriverCode(problemDrivers[language] || '');
+    } else {
+      setCode(DEFAULT_CODE[language]);
+      setHiddenDriverCode('');
+    }
+    setOutput('');
+    setCompileStatus(null);
+  }, [language]);
 
   const compileAndRun = async () => {
     setIsCompiling(true);
@@ -88,15 +125,14 @@ export default function App() {
       
       // Use local backend server to avoid CORS issues
       const fullCode = hiddenDriverCode ? `${code}\n\n${hiddenDriverCode}` : code;
+      const langCfg = LANG_CONFIG[language];
       const response = await fetch('http://localhost:3001/api/compile', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           code: fullCode,
-          language: 'java',
-          versionIndex: '4',
+          language: langCfg.jdoodle,
+          versionIndex: langCfg.version,
           stdin
         })
       });
@@ -162,7 +198,7 @@ Or run both frontend and backend together:
       const resp = await fetch('http://localhost:3001/api/gemini/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, language: 'java' })
+        body: JSON.stringify({ code, language: LANG_CONFIG[language]?.label || language })
       });
       if (!resp.ok) {
         const text = await resp.text();
@@ -186,7 +222,7 @@ Or run both frontend and backend together:
       const resp = await fetch('http://localhost:3001/api/gemini/annotate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: currentCode, language: 'java' })
+        body: JSON.stringify({ code: currentCode, language: LANG_CONFIG[language]?.label || language })
       });
       const data = await resp.json();
       if (resp.ok) {
@@ -380,11 +416,22 @@ Or run both frontend and backend together:
                   <span className="w-3 h-3 rounded-full bg-green-500"></span>
                 </span>
                 <span className={`text-xs font-medium ml-1 ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                  Solution.java
+                  Solution.{LANG_CONFIG[language]?.ext}
                 </span>
               </div>
-              <div className="flex items-center gap-3 text-xs">
-                <span className={`px-2 py-0.5 rounded font-medium ${isDark ? 'bg-orange-500/20 text-orange-400' : 'bg-orange-100 text-orange-700'}`}>Java</span>
+              <div className="flex items-center gap-2 text-xs">
+                {/* Language selector */}
+                <select
+                  value={language}
+                  onChange={e => setLanguage(e.target.value)}
+                  className={`text-xs px-2 py-1 rounded border font-medium focus:outline-none focus:ring-1 focus:ring-blue-500/50 cursor-pointer ${
+                    isDark ? 'bg-slate-800 border-slate-700 text-slate-200' : 'bg-slate-100 border-slate-200 text-slate-700'
+                  }`}
+                >
+                  {Object.entries(LANG_CONFIG).map(([key, cfg]) => (
+                    <option key={key} value={key}>{cfg.label}</option>
+                  ))}
+                </select>
                 <span className={muted}>{code.split('\n').length} lines</span>
               </div>
             </div>
